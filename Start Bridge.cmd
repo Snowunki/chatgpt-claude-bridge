@@ -2,7 +2,17 @@
 setlocal EnableExtensions
 rem ChatGPT <-> Claude Code Bridge launcher. Double-click to start.
 rem Runs from its own folder and keeps all Python packages in .venv inside it.
-cd /d "%~dp0"
+set "BRIDGE_DIR=%~dp0"
+cd /d "%BRIDGE_DIR%"
+if errorlevel 1 goto :bad_folder
+
+rem Check the extracted package before creating an environment or downloading anything.
+for %%F in (requirements.txt bridge.py bridge_gui.py ui_i18n.py) do (
+    if not exist "%BRIDGE_DIR%%%F" (
+        set "MISSING_FILE=%%F"
+        goto :missing_files
+    )
+)
 title ChatGPT - Claude Code Bridge
 
 rem ---- Python 3.10+ ---------------------------------------------------------
@@ -23,31 +33,48 @@ where claude >nul 2>&1
 if errorlevel 1 goto :no_claude
 
 rem ---- Private virtual environment -----------------------------------------
-if exist ".venv\Scripts\python.exe" goto :venv_ready
+if exist "%BRIDGE_DIR%.venv\Scripts\python.exe" goto :venv_ready
 echo First run: creating a private Python environment in .venv ...
-%PY% -m venv .venv
+%PY% -m venv "%BRIDGE_DIR%.venv"
 if errorlevel 1 goto :venv_failed
 :venv_ready
 
-fc /b requirements.txt ".venv\requirements.installed" >nul 2>&1
+fc /b "%BRIDGE_DIR%requirements.txt" "%BRIDGE_DIR%.venv\requirements.installed" >nul 2>&1
 if not errorlevel 1 goto :deps_ready
 echo Installing dependencies - this happens once and needs an internet connection ...
-".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r requirements.txt
+"%BRIDGE_DIR%.venv\Scripts\python.exe" -m pip install --disable-pip-version-check -r "%BRIDGE_DIR%requirements.txt"
 if errorlevel 1 goto :deps_failed
-copy /y requirements.txt ".venv\requirements.installed" >nul
+copy /y "%BRIDGE_DIR%requirements.txt" "%BRIDGE_DIR%.venv\requirements.installed" >nul
 :deps_ready
 
-".venv\Scripts\python.exe" -c "import tkinter" >nul 2>&1
+"%BRIDGE_DIR%.venv\Scripts\python.exe" -c "import tkinter" >nul 2>&1
 if errorlevel 1 goto :no_tk
 
 rem ---- Start the window ----------------------------------------------------
 if /i "%~1"=="--console" (
-    ".venv\Scripts\python.exe" bridge_gui.py
+    "%BRIDGE_DIR%.venv\Scripts\python.exe" "%BRIDGE_DIR%bridge_gui.py"
     pause
     exit /b 0
 )
-start "" ".venv\Scripts\pythonw.exe" bridge_gui.py
+start "" "%BRIDGE_DIR%.venv\Scripts\pythonw.exe" "%BRIDGE_DIR%bridge_gui.py"
 exit /b 0
+
+:missing_files
+echo.
+echo [!] Incomplete extraction: "%MISSING_FILE%" is missing.
+echo     Folder: "%BRIDGE_DIR%"
+echo     Right-click the ZIP and choose Extract All.
+echo     Open the extracted folder, then run Start Bridge.cmd from there.
+echo     Do not run the CMD directly inside the ZIP or copy it alone.
+echo.
+echo     ZIP dosyasina sag tiklayip Tumunu Ayikla secenegini kullanin.
+echo     CMD dosyasini ZIP icinden acmayin; tum dosyalar ayni klasorde olmali.
+goto :fail
+
+:bad_folder
+echo.
+echo [!] Could not open the application folder. Extract the full ZIP to a local folder.
+goto :fail
 
 :no_python
 echo.
@@ -77,8 +104,8 @@ goto :fail
 
 :deps_failed
 echo.
-echo [!] Installing dependencies failed. Check your internet connection and run this file again.
-if exist ".venv\requirements.installed" del ".venv\requirements.installed"
+echo [!] Installing dependencies failed. Read the pip error above for details, then run this file again.
+if exist "%BRIDGE_DIR%.venv\requirements.installed" del "%BRIDGE_DIR%.venv\requirements.installed"
 goto :fail
 
 :no_tk

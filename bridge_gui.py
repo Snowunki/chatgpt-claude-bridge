@@ -20,6 +20,7 @@ from tkinter import ttk
 from urllib.parse import urlparse
 
 import bridge
+import ui_i18n
 
 OPEN_TAB = "Chrome'da açık sohbet"
 NEW_SESSION = "Yeni oturum · düşük token"
@@ -249,10 +250,17 @@ class Backend:
 class BridgeApp(tk.Tk):
     HEALTH_MS = 5000
 
-    def __init__(self, backend=None, max_minutes: float = 30, max_messages: int = 30):
+    def __init__(self, backend=None, max_minutes: float = 30, max_messages: int = 30,
+                 language: str = "tr", settings_path: Path | None = None):
         super().__init__()
+        self.language = language if language in ui_i18n.LANGUAGES else "tr"
+        self.settings_path = settings_path
+        self._translated_widgets = []
+        self._text_sources = {}
+        self._side_text = {}
+        self._log_entries = []
         self.backend = backend or Backend()
-        self.title("ChatGPT ↔ Claude köprüsü")
+        self.title(self.tr("ChatGPT ↔ Claude köprüsü"))
         self.geometry("820x800")
         self.minsize(560, 560)
         self.events: queue.Queue = queue.Queue()
@@ -271,6 +279,8 @@ class BridgeApp(tk.Tk):
         self.gpt_choices: list[tuple[str, str | None]] = [(OPEN_TAB, None)]
         self.claude_choices: list[tuple[str, bridge.ClaudeSession | None]] = [(NEW_SESSION, None)]
         self._build(max_minutes, max_messages)
+        self._register_labels(self)
+        self.set_language(self.language, persist=False)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._poll_id = self.after(100, self._poll)
         self._health_id = self.after(self.HEALTH_MS, self._health)
@@ -284,8 +294,75 @@ class BridgeApp(tk.Tk):
         super().destroy()
 
     # ------------------------------------------------------------------ UI
+    def tr(self, text, **values):
+        return ui_i18n.translate(text, self.language, **values)
+
+    def _register_labels(self, parent):
+        """Register only application-owned static labels, before any messages exist."""
+        for widget in parent.winfo_children():
+            if "text" in widget.keys() and not (
+                    "textvariable" in widget.keys() and widget.cget("textvariable")):
+                source = str(widget.cget("text"))
+                if source in ui_i18n.EN:
+                    self._translated_widgets.append((widget, source))
+            self._register_labels(widget)
+
+    def _set_text(self, var, text):
+        self._text_sources[str(var)] = (var, text)
+        var.set(ui_i18n.diagnostic(text, self.language))
+
+    def _choice_labels(self):
+        # Only the synthetic first entries belong to the UI. Real titles stay verbatim.
+        gpt = [t for t, _ in self.gpt_choices]
+        if gpt:
+            suffix = gpt[0][len(OPEN_TAB):] if gpt[0].startswith(OPEN_TAB) else ""
+            gpt[0] = self.tr(OPEN_TAB) + suffix
+        claude = [self.tr(NEW_SESSION) if s is None else t
+                  for t, s in self.claude_choices]
+        return gpt, claude
+
+    def set_language(self, language, persist=True):
+        if language not in ui_i18n.LANGUAGES:
+            return
+        self.language = language
+        self.language_var.set(ui_i18n.LANGUAGES[language])
+        self.title(self.tr("ChatGPT ↔ Claude köprüsü"))
+        live = []
+        for widget, source in self._translated_widgets:
+            if widget.winfo_exists():
+                widget.configure(text=self.tr(source))
+                live.append((widget, source))
+        self._translated_widgets = live
+        for var, source in self._text_sources.values():
+            var.set(ui_i18n.diagnostic(source, language))
+        gi, ci = self.gpt_box.current(), self.claude_box.current()
+        self.gpt_box["values"], self.claude_box["values"] = self._choice_labels()
+        self.gpt_box.current(max(gi, 0))
+        self.claude_box.current(max(ci, 0))
+        self._update_summary(sync_folder=False)
+        self._set_status(self.run_state)
+        for side, (key, text) in list(self._side_text.items()):
+            self._set_side(side, key, text)
+        self._render_log()
+        if persist and self.settings_path:
+            try:
+                ui_i18n.save_language(self.settings_path, language)
+            except OSError as e:
+                self._log(f"Language preference could not be saved: {e}")
+
     def _build(self, max_minutes, max_messages):
         self.option_add("*Font", ("Segoe UI", 10))
+        language_row = ttk.Frame(self)
+        language_row.pack(fill="x", padx=10, pady=(8, 0))
+        self.language_var = tk.StringVar(value=ui_i18n.LANGUAGES[self.language])
+        self.language_box = ttk.Combobox(language_row, state="readonly", width=10,
+                                       textvariable=self.language_var,
+                                       values=list(ui_i18n.LANGUAGES.values()))
+        self.language_box.pack(side="right")
+        ttk.Label(language_row, text="Dil / Language").pack(side="right", padx=(0, 8))
+        self.language_box.bind("<<ComboboxSelected>>", lambda e: self.set_language(
+            next(code for code, label in ui_i18n.LANGUAGES.items()
+                 if label == self.language_var.get())))
         top = tk.Frame(self)
         top.pack(fill="x", padx=10, pady=(8, 4))
         top.columnconfigure(0, weight=1)
@@ -404,8 +481,7 @@ class BridgeApp(tk.Tk):
 
     def _fill_boxes(self, keep=None):
         gpt_key, ses_key = keep or (None, None)
-        self.gpt_box["values"] = [t for t, _ in self.gpt_choices]
-        self.claude_box["values"] = [t for t, _ in self.claude_choices]
+        self.gpt_box["values"], self.claude_box["values"] = self._choice_labels()
         gi = next((i for i, (_, u) in enumerate(self.gpt_choices)
                    if u and gpt_key and u.split("#")[0] == gpt_key.split("#")[0]), 0)
         ci = next((i for i, (_, s) in enumerate(self.claude_choices)
@@ -414,29 +490,31 @@ class BridgeApp(tk.Tk):
         self.claude_box.current(ci)
         self._update_summary()
 
-    def _update_summary(self):
+    def _update_summary(self, sync_folder=True):
         gi, ci = max(self.gpt_box.current(), 0), max(self.claude_box.current(), 0)
-        gpt_name = self.gpt_choices[gi][0]
+        gpt_labels, claude_labels = self._choice_labels()
+        gpt_name = gpt_labels[gi]
         session = self.claude_choices[ci][1]
-        claude_name = self.claude_choices[ci][0] if session is None else (
+        claude_name = claude_labels[ci] if session is None else (
             session.title or session.first or session.id[:8])
         tools = self.tools_var.get() if hasattr(self, "tools_var") else False
-        mode = "  ·  araçlı" if tools else "  ·  yalnızca metin"
-        self.summary_var.set(f"Seçili:  ChatGPT → {gpt_name}    ·    Claude → {claude_name}{mode}")
-        self.token_var.set(TOKEN_NOTE if session else "")
+        mode = self.tr("  ·  araçlı" if tools else "  ·  yalnızca metin")
+        self.summary_var.set(self.tr("Seçili:  ChatGPT → {gpt}    ·    Claude → {claude}{mode}",
+                                     gpt=gpt_name, claude=claude_name, mode=mode))
+        self.token_var.set(self.tr(TOKEN_NOTE) if session else "")
         if not hasattr(self, "folder_entry"):
             return
-        if session:  # mevcut oturum kendi klasöründe çalışır
+        if sync_folder and session:  # mevcut oturum kendi klasöründe çalışır
             self.folder_var.set(session.cwd)
-        elif self.folder_var.get() and getattr(self, "_folder_from_session", False):
+        elif sync_folder and self.folder_var.get() and getattr(self, "_folder_from_session", False):
             self.folder_var.set("")
         self._folder_from_session = bool(session)
-        self.tools_warn_var.set(TOOLS_WARN if tools else "")
+        self.tools_warn_var.set(self.tr(TOOLS_WARN) if tools else "")
         self._update_buttons()
 
     def _pick_folder(self):
         from tkinter import filedialog
-        d = filedialog.askdirectory(parent=self, title="Claude'un çalışacağı proje klasörü",
+        d = filedialog.askdirectory(parent=self, title=self.tr("Claude'un çalışacağı proje klasörü"),
                                     initialdir=self.folder_var.get() or str(Path.home()))
         if d:
             self.folder_var.set(os.path.normpath(d))
@@ -445,10 +523,12 @@ class BridgeApp(tk.Tk):
     def _set_status(self, key: str):
         self.run_state = key
         text, bg = STATUS[key]
-        self.status_var.set(text)
+        self.status_var.set(self.tr(text))
         self.status.configure(bg=bg)
 
     def _set_side(self, side: str, key: str, text: str):
+        self._side_text[side] = (key, text)
+        text = ui_i18n.diagnostic(text, self.language)
         if side == "gpt":
             self.gpt_state = key
             self.gpt_ind_var.set(f"ChatGPT: {text}")
@@ -482,18 +562,30 @@ class BridgeApp(tk.Tk):
             self.folder_btn.configure(state=folder)
 
     def _log(self, msg: str):
+        stamp = time.strftime('%H:%M:%S')
+        self._log_entries.append((stamp, msg))
         self.log_text.configure(state="normal")
-        self.log_text.insert("end", f"{time.strftime('%H:%M:%S')}  {msg}\n")
+        self.log_text.insert("end", f"{stamp}  {ui_i18n.diagnostic(msg, self.language)}\n")
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
+
+    def _render_log(self):
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", "end")
+        for stamp, msg in self._log_entries:
+            self.log_text.insert("end", f"{stamp}  {ui_i18n.diagnostic(msg, self.language)}\n")
+        self.log_text.configure(state="disabled")
+        self.log_text.see("end")
 
     def _bubble(self, sender: str, text: str, side: str, bg: str, ratio: float = 0.68):
         self.bubbles.append((sender, side, text))
         row = tk.Frame(self.inner, bg="white")
         row.pack(fill="x", padx=8, pady=5)
         anchor = "w" if side == "left" else ("e" if side == "right" else "center")
-        tk.Label(row, text=sender, bg="white", fg="#555",
-                 font=("Segoe UI", 9, "bold")).pack(anchor=anchor)
+        heading = tk.Label(row, text=self.tr(sender), bg="white", fg="#555",
+                           font=("Segoe UI", 9, "bold"))
+        heading.pack(anchor=anchor)
+        self._translated_widgets.append((heading, sender))
         body = tk.Label(row, text=text, bg=bg, justify="left", anchor="w", padx=10, pady=7,
                         wraplength=max(200, int(self.canvas.winfo_width() * ratio)))
         body._ratio = ratio
@@ -507,7 +599,7 @@ class BridgeApp(tk.Tk):
             return  # ikinci bağlanma / ikinci Chrome yok
         self.connecting = True
         self.gpt_connected = False
-        self.error_var.set("")
+        self._set_text(self.error_var, "")
         self._update_buttons()
         cancel = self.connect_cancel
         put = self.events.put
@@ -522,7 +614,7 @@ class BridgeApp(tk.Tk):
                 put(("side", ("claude", "ready", "Claude CLI hazır")))
             except Exception as e:
                 log(f"Claude hatası: {e}")
-                put(("side", ("claude", "error", f"Hata: {short(e)}")))
+                put(("side", ("claude", "error", f"Hata: {e}")))
             try:
                 current, chats = self.backend.connect_gpt(
                     log, lambda k, t: put(("side", ("gpt", k, t))), cancel)
@@ -532,7 +624,7 @@ class BridgeApp(tk.Tk):
                 pass
             except Exception as e:
                 log(f"ChatGPT hatası: {e}")
-                put(("side", ("gpt", "error", f"Hata: {short(e)}")))
+                put(("side", ("gpt", "error", f"Hata: {e}")))
             put(("connect_done", None))
 
         threading.Thread(target=work, daemon=True).start()
@@ -573,24 +665,24 @@ class BridgeApp(tk.Tk):
             return
         task = self.task_text.get("1.0", "end").strip()
         if not task:
-            self.error_var.set("Görev metni boş.")
+            self._set_text(self.error_var, "Görev metni boş.")
             return
         try:
             minutes, messages = float(self.minutes_var.get()), int(self.messages_var.get())
         except ValueError:
-            self.error_var.set("Süre ve mesaj sınırı sayı olmalı.")
+            self._set_text(self.error_var, "Süre ve mesaj sınırı sayı olmalı.")
             return
         gpt_url = self.gpt_choices[max(self.gpt_box.current(), 0)][1]
         session = self.claude_choices[max(self.claude_box.current(), 0)][1]
         tools = self.tools_var.get()
         cwd = session.cwd if session else (self.folder_var.get().strip() or None)
         if tools and not session and not (cwd and os.path.isdir(cwd)):
-            self.error_var.set("Araçlı modda yeni oturum için var olan bir proje klasörü seçin.")
+            self._set_text(self.error_var, "Araçlı modda yeni oturum için var olan bir proje klasörü seçin.")
             return
         for child in self.inner.winfo_children():
             child.destroy()
         self.bubbles, self.result_text, self._wrap_labels = [], None, []
-        self.error_var.set("")
+        self._set_text(self.error_var, "")
         self._set_status("starting")
         self._log(self.summary_var.get())
         self.stop_btn.configure(state="normal")
@@ -647,7 +739,7 @@ class BridgeApp(tk.Tk):
         self._set_status(key)
         if msg:
             if key == "error":
-                self.error_var.set(msg)
+                self._set_text(self.error_var, msg)
             self._log(msg)
         self.stop_btn.configure(state="disabled")
         self._update_buttons()
@@ -711,7 +803,7 @@ class BridgeApp(tk.Tk):
             if seq == self._prep_seq:
                 self.preparing = False
                 self._log(f"ChatGPT hatası: {msg}")
-                self._set_side("gpt", "error", f"Hata: {short(msg)}")
+                self._set_side("gpt", "error", f"Hata: {msg}")
         elif kind == "connect_done":
             self.connecting = False
             self._update_buttons()
@@ -727,7 +819,8 @@ def main():
     # HTTPS trafiğini tarayan güvenlik yazılımları için claude.exe Windows
     # sertifika deposunu kullansın (TLS doğrulaması açık kalır).
     os.environ.setdefault("NODE_USE_SYSTEM_CA", "1")
-    BridgeApp().mainloop()
+    settings = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "chatgpt-claude-bridge" / "settings.json"
+    BridgeApp(language=ui_i18n.load_language(settings), settings_path=settings).mainloop()
 
 
 if __name__ == "__main__":

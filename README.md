@@ -19,7 +19,7 @@ ChatGPT runs the task in a ChatGPT conversation you pick. When it wants Claude's
 3. Click **Bağlan** (Connect). A separate Chrome window opens with its own profile. Log in to ChatGPT there the first time.
 4. Pick the ChatGPT conversation and the Claude session, type the task, and click **Başlat** (Start).
 
-> The window's labels are currently in Turkish. See [Window labels](#window-labels) for translations.
+> Use **Dil / Language** at the top of the window to switch between **Türkçe** and **English**. The change is immediate, including during a running task, and your preference is remembered.
 
 ---
 
@@ -66,6 +66,20 @@ If Claude should actually change files, for example to implement what ChatGPT pl
 Only turn tool mode on for tasks and conversations you trust: ChatGPT's messages decide what Claude is asked to change.
 
 ## Window labels
+
+The interface supports Turkish and English. Changing the language preserves your task,
+selected conversations, project folder, limits, and running job. Conversation titles and
+model responses remain in their original language; the language switch does not translate
+messages or change the model protocol. External CLI/browser error details may remain in
+their original language.
+
+The language preference is stored locally in
+`%LOCALAPPDATA%\chatgpt-claude-bridge\settings.json`. If it cannot be saved, the current
+window still switches language. Turkish is the default on the first launch.
+
+**Türkçe:** Pencerenin üstündeki **Dil / Language** alanından **Türkçe** veya **English**
+seçin. Dil anında değişir ve sonraki açılışta hatırlanır. Görev metni, sohbet seçimi ve
+devam eden işlem korunur; sohbet içerikleri çevrilmez.
 
 | Label | Meaning |
 |---|---|
