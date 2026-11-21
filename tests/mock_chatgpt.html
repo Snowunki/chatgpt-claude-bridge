@@ -1,0 +1,62 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>mock chatgpt</title></head>
+<body>
+<!-- ChatGPT DOM'unun köprünün kullandığı kısmını taklit eder. ?mode=ok | swallow -->
+<nav>
+  <a href="?mode=ok&chat=/c/planning">Project Planning</a>
+  <a href="?mode=ok&chat=/c/diger">Başka bir sohbet</a>
+</nav>
+<!-- Gerçek ChatGPT gibi: önce GİZLİ bir mesaj kutusu ve gönder düğmesi var -->
+<form id="hidden-composer" style="display:none">
+  <div contenteditable="true" data-composer-markdown="" aria-label="ChatGPT'ye sor"></div>
+  <button type="button" data-testid="send-button">Gönder</button>
+</form>
+<div id="thread"></div>
+<div id="prompt-textarea" contenteditable="true" aria-label="ChatGPT ile çalış" style="border:1px solid #888;min-height:40px;white-space:pre-wrap"></div>
+<button id="real-send" data-testid="send-button">Gönder</button>
+<script>
+const mode = new URLSearchParams(location.search).get('mode') || 'ok';
+const box = document.getElementById('prompt-textarea');
+const thread = document.getElementById('thread');
+let n = 0, turn = 0;
+window.received = [];
+box.addEventListener('paste', e => {
+  e.preventDefault();
+  box.innerText = e.clipboardData.getData('text/plain');
+});
+function add(role, text) {
+  const d = document.createElement('div');
+  d.setAttribute('data-message-author-role', role);
+  d.setAttribute('data-message-id', role + '-' + (++n));
+  const md = document.createElement('div'); md.className = 'markdown';
+  md.innerText = text; d.appendChild(md); thread.appendChild(d); return md;
+}
+window.chat = new URLSearchParams(location.search).get('chat') || '';
+if (window.chat) add('assistant', 'DONE\neski sohbetten kalan yanıt');  // yeni sanılmamalı
+function reply(userText) {
+  turn++;
+  let full;
+  if (turn === 1) full = 'TO_CLAUDE\nİki artı iki kaç? Ölçüt: tek sayı.';
+  else if (turn === 2) full = 'DONE\nSonuç alındı: ' + userText.split('\n').slice(1).join(' ');
+  else full = 'beklenmeyen tur';
+  const stop = document.createElement('button');
+  stop.setAttribute('data-testid', 'stop-button'); stop.textContent = 'Durdur';
+  document.body.appendChild(stop);
+  const md = add('assistant', '');
+  let i = 0;
+  const t = setInterval(() => {           // akış halinde yaz
+    i += 4; md.innerText = full.slice(0, i);
+    if (i >= full.length) { clearInterval(t); setTimeout(() => stop.remove(), 400); }
+  }, 150);
+}
+document.getElementById("real-send").addEventListener('click', () => {
+  const text = box.innerText;
+  if (!text.trim()) return;
+  window.received.push(text);
+  if (mode === 'swallow') return;           // gönderim sohbette hiç görünmez
+  box.innerText = '';
+  add('user', text.replace(/`|\*\*/g, ''));  // ChatGPT gibi markdown'ı işler
+  setTimeout(() => reply(text), 500);
+});
+</script>
+</body></html>
